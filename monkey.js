@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         华科课程平台刷课助手 (全功能可控版)
+// @name         华科课程平台刷课助手
 // @namespace    http://tampermonkey.net/
 // @version      0.0.4
-// @description  华中科技大学课程平台刷课助手，自定义跳过已完成任务，灵活补时长与秒刷切换
+// @description  华中科技大学课程平台刷课助手，点击右上角开始自动刷课（可选是否跳过测验），可以自动刷完所有视频
 // @author       DavLiu
 // @license      MIT
 // @include        *://smartcourse.hust.edu.cn/*
@@ -108,8 +108,13 @@
             localStorage.setItem('__brushMode', brushMode);
         };
 
+        const modeNote = document.createElement('span');
+        modeNote.innerText = '切换后刷新生效~注意不允许的视频用不了两倍速QAQ';
+        modeNote.style.cssText = 'font-size: 10px; color: #666;';
+
         modeWrapper.appendChild(modeLabel);
         modeWrapper.appendChild(modeSelect);
+        modeWrapper.appendChild(modeNote);
         panel.appendChild(modeWrapper);
 
         // 配置项容器
