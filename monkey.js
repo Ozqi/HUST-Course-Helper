@@ -29,7 +29,11 @@
     let skipNonVideoTasks = localStorage.getItem('__skipNonVideoTasks') === 'true';
     // 新增：是否跳过平台已经打绿勾的视频，默认开启（常规逻辑）
     let skipFinishedVideos = localStorage.getItem('__skipFinishedVideos') !== 'false';
-    let brushMode = localStorage.getItem('__brushMode') || 'safe2x';
+    let brushMode = normalizeBrushMode(localStorage.getItem('__brushMode'));
+
+    function normalizeBrushMode(mode) {
+        return ['safe2x', 'safe1x', 'fast'].includes(mode) ? mode : 'safe2x';
+    }
 
     function showLog(msg, isError = false) {
         console[isError ? 'error' : 'log']('【刷课助手】' + msg);
@@ -104,7 +108,7 @@
             <option value="fast" ${brushMode === 'fast' ? 'selected' : ''}>秒刷模式 (注意！没时长)</option>
         `;
         modeSelect.onchange = (e) => {
-            brushMode = e.target.value;
+            brushMode = normalizeBrushMode(e.target.value);
             localStorage.setItem('__brushMode', brushMode);
         };
 
@@ -175,11 +179,19 @@
     }
 
     function injectVideoHacker(frame) {
+        const injectedMode = JSON.stringify(normalizeBrushMode(brushMode));
         try {
             frame.contentWindow.eval(`
                 window.__inject_flag = true;
                 window.__video_hacked = false;
-                
+
+                function safePlay(player) {
+                    const playResult = player.play();
+                    if (playResult && typeof playResult.catch === 'function') {
+                        playResult.catch(function(e){});
+                    }
+                }
+
                 function modifyPlayer() {
                     if(typeof videojs === 'undefined' || !videojs.getAllPlayers().length) {
                         setTimeout(modifyPlayer, 1000);
@@ -190,7 +202,7 @@
                     if(player) {
                         try {
                             player.muted(true);
-                            player.play().catch(function(e){});
+                            safePlay(player);
                         } catch(e) {}
 
                         let d = player.duration();
@@ -199,7 +211,7 @@
                             return;
                         }
 
-                        const mode = "${brushMode}";
+                        const mode = ${injectedMode};
                         if (mode === "fast") {
                             try {
                                 player.currentTime(d);
@@ -229,7 +241,7 @@
                                         return;
                                     }
                                     if (player.paused() && !window.__video_hacked) {
-                                        player.play().catch(function(e){});
+                                        try { safePlay(player); } catch(e) {}
                                     }
                                 }, 1500);
 
@@ -268,6 +280,8 @@
             const parentContainer = frame.closest('.ans-attach-ct') || frame.parentElement;
             const isJob = parentContainer && (parentContainer.querySelector('.ans-job-icon') || parentContainer.classList.contains('ans-job-icon') || parentContainer.classList.contains('ans-attach-ct'));
             const isFinishedByPlatform = parentContainer && parentContainer.classList.contains('ans-job-finished');
+
+            if (!isJob) continue;
 
             if (isVideo) {
                 // 核心修改：如果用户勾选了“跳过平台已完成”，并且平台标记为 finished，直接 continue 忽略它
