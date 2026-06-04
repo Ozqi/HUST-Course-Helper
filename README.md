@@ -9,6 +9,7 @@
 首先需要安装 Tampermonkey 浏览器插件：
 - [点击此处安装 Tampermonkey](https://chromewebstore.google.com/detail/%E7%AF%A1%E6%94%B9%E7%8C%B4/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=zh-CN)
 - **注意打开开发者模式**
+- **注意打开“允许运行用户脚本”**
 
 ### 2. 安装脚本
 安装完插件后，可通过以下方式安装脚本：
