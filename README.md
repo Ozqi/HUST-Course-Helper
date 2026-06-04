@@ -11,7 +11,9 @@
 - **注意打开开发者模式**
 
 ### 2. 安装脚本
-安装完插件后，点击加入脚本，将js文件复制粘贴进去。
+安装完插件后，可通过以下方式安装脚本：
+- [点击此处从 Greasy Fork 安装脚本](https://greasyfork.org/zh-CN/scripts/522785-%E5%8D%8E%E7%A7%91%E8%AF%BE%E7%A8%8B%E5%B9%B3%E5%8F%B0%E5%88%B7%E8%AF%BE%E5%8A%A9%E6%89%8B)
+- 或点击加入脚本，将 js 文件复制粘贴进去。
 
 <img width="305" height="444" alt="image" src="https://github.com/user-attachments/assets/6f339b7b-02f1-4257-8bd3-56122b6964b8" />
 
