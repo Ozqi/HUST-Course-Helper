@@ -2,13 +2,17 @@
 // @name         华科课程平台刷课助手
 // @namespace    http://tampermonkey.net/
 // @version      0.0.4
-// @description  华中科技大学课程平台刷课助手，点击右上角开始自动刷课（可选是否跳过测验），可以自动刷完所有视频
+// @description  华中科技大学课程平台刷课助手，点击右上角开始自动刷课，可以自动刷完所有视频｜https://github.com/Ozqi/HUST-Course-Helper
+// @homepageURL  https://github.com/Ozqi/HUST-Course-Helper
+// @supportURL   https://github.com/Ozqi/HUST-Course-Helper/issues
 // @author       DavLiu
 // @license      MIT
 // @include        *://smartcourse.hust.edu.cn/*
 // @include        *://smartcourse.hust.edu.cn/mooc-smartcourse/*
 // @include        *://smartcourse.hust.edu.cn/mooc-smartcourse/mycourse/studentstudy*
 // @match          *://smartcourse.hust.edu.cn/mycourse/*
+// @include        *://localhost/*
+// @include        *://127.0.0.1/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=hust.edu.cn
 // @grant        none
 // @run-at       document-idle
@@ -23,6 +27,7 @@
         return;
     }
 
+    const DIRECT_COMPLETE_HOSTS = new Set(['localhost', '127.0.0.1', 'https://smartcourse.hust.edu.cn']); 
     let isAutoPlay = false;
     let mainTimer = null;
     let noTaskCounter = 0;
@@ -30,17 +35,74 @@
     // 新增：是否跳过平台已经打绿勾的视频，默认开启（常规逻辑）
     let skipFinishedVideos = localStorage.getItem('__skipFinishedVideos') !== 'false';
     let brushMode = localStorage.getItem('__brushMode') || 'safe2x';
+    let videoLoadWaits = new WeakMap();
+    let videoRecoveries = new WeakMap();
+
+    function getStatusText(msg) {
+        if (msg.includes('直接完成')) return '直接完成';
+        if (msg.includes('初始化')) return '初始化';
+        if (msg.includes('主框架')) return '等框架';
+        if (msg.includes('视频拉取卡住')) return '视频拉取卡住';
+        if (msg.includes('视频加载失败')) return '视频加载失败';
+        if (msg.includes('自动切换线路')) return '切换线路';
+        if (msg.includes('重载视频')) return '重载视频';
+        if (msg.includes('刷新视频框架')) return '刷新框架';
+        if (msg.includes('等待视频源')) return '等视频源';
+        if (msg.includes('秒刷')) return '秒刷中';
+        if (msg.includes('挂机')) return msg.includes('safe1x') ? '挂机·1x' : '挂机·2x';
+        if (msg.includes('非视频任务') && msg.includes('跳过')) return '跳过任务';
+        if (msg.includes('非视频任务')) return '待手动';
+        if (msg.includes('验证')) return '验证中';
+        if (msg.includes('本页任务')) return '切页中';
+        if (msg.includes('同节下一标签')) return '下标签';
+        if (msg.includes('下一小节')) return '下一节';
+        if (msg.includes('全部刷完')) return '已完成';
+        return msg.length > 6 ? msg.substring(0, 6) : msg;
+    }
 
     function showLog(msg, isError = false) {
         console[isError ? 'error' : 'log']('【刷课助手】' + msg);
         const btn = document.querySelector('.video-helper-btn');
         if (btn && isAutoPlay) {
-            btn.innerHTML = '⏸ ' + msg.substring(0, 12) + '...';
+            btn.textContent = '⏸ ' + getStatusText(msg);
         }
     }
 
     function isStudyPage() {
-        return window.location.href.includes('studentstudy') && !window.location.href.includes('login');
+        return DIRECT_COMPLETE_HOSTS.has(window.location.hostname) ||
+            (window.location.href.includes('studentstudy') && !window.location.href.includes('login'));
+    }
+
+    function isDirectCompleteHost() {
+        return DIRECT_COMPLETE_HOSTS.has(window.location.hostname);
+    }
+
+    function directCompleteFrame(frame) {
+        try {
+            frame.contentWindow.eval(`
+                window.__inject_flag = true;
+                window.__video_hacked = false;
+
+                function directCompleteForLab() {
+                    try {
+                        if (typeof ed_complete === 'function') {
+                            ed_complete();
+                        }
+                        if (typeof JC !== 'undefined' && JC && typeof JC.completed === 'function') {
+                            JC.completed(0);
+                        }
+                        window.__video_hacked = true;
+                        console.log('【刷课助手】直接完成');
+                    } catch (e) {
+                        setTimeout(directCompleteForLab, 1000);
+                    }
+                }
+                directCompleteForLab();
+            `);
+            showLog('直接完成');
+        } catch (e) {
+            console.error('【刷课助手】直接完成失败:', e);
+        }
     }
 
     function addControlPanel() {
@@ -163,6 +225,8 @@
         if (isAutoPlay) {
             btn.style.background = '#f44336';
             noTaskCounter = 0;
+            videoLoadWaits = new WeakMap();
+            videoRecoveries = new WeakMap();
             showLog('已开启，正在初始化...');
             runTaskLoop();
         } else {
@@ -170,8 +234,119 @@
             btn.style.background = '#4CAF50';
             clearTimeout(mainTimer);
             noTaskCounter = 0;
+            videoLoadWaits = new WeakMap();
+            videoRecoveries = new WeakMap();
             console.log('【刷课助手】已手动停止');
         }
+    }
+
+    function getVideoLoadState(frame) {
+        try {
+            const win = frame.contentWindow;
+            const doc = win.document;
+            const video = doc.querySelector('video');
+
+            if (!video) {
+                videoLoadWaits.delete(frame);
+                return { status: 'waitingSource' };
+            }
+
+            if (video.error) {
+                videoLoadWaits.delete(frame);
+                return { status: 'error', error: video.error.code };
+            }
+
+            const hasSource = Boolean(video.currentSrc || video.src);
+            const hasBuffered = video.buffered && video.buffered.length > 0;
+            const hasMetadata = video.readyState >= 1 || Number.isFinite(video.duration);
+
+            if (hasBuffered || hasMetadata) {
+                videoLoadWaits.delete(frame);
+                return { status: 'ready' };
+            }
+
+            if (hasSource && video.readyState === 0 && video.networkState === 2) {
+                const waited = (videoLoadWaits.get(frame) || 0) + 2;
+                videoLoadWaits.set(frame, waited);
+                return { status: waited >= 8 ? 'stalled' : 'loading', waited };
+            }
+
+            return { status: hasSource ? 'loading' : 'waitingSource' };
+        } catch (e) {
+            videoLoadWaits.delete(frame);
+            return { status: 'unknown' };
+        }
+    }
+
+    function clickAlternateVideoLine(doc) {
+        const radios = Array.from(doc.querySelectorAll('input[type="radio"]'));
+        const target = radios.find((radio) => !radio.checked && !radio.disabled);
+
+        if (!target) return false;
+
+        target.click();
+        target.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    }
+
+    function reloadVideo(frame) {
+        const doc = frame.contentWindow.document;
+        const video = doc.querySelector('video');
+
+        if (video) {
+            try {
+                video.pause();
+                video.load();
+                video.play().catch(function () { });
+                return true;
+            } catch (e) { }
+        }
+
+        try {
+            frame.contentWindow.location.reload();
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function recoverVideoLoad(frame, reason) {
+        let recovery = videoRecoveries.get(frame) || { count: 0, switchedLine: false };
+        recovery.count += 1;
+
+        try {
+            const doc = frame.contentWindow.document;
+
+            if (!recovery.switchedLine && clickAlternateVideoLine(doc)) {
+                recovery.switchedLine = true;
+                videoRecoveries.set(frame, recovery);
+                videoLoadWaits.delete(frame);
+                showLog('自动切换线路...');
+                mainTimer = setTimeout(runTaskLoop, 5000);
+                return true;
+            }
+
+            if (recovery.count <= 3 && reloadVideo(frame)) {
+                videoRecoveries.set(frame, recovery);
+                videoLoadWaits.delete(frame);
+                showLog(reason === 'error' ? '重载视频...' : '视频拉取卡住，重载视频...');
+                mainTimer = setTimeout(runTaskLoop, 5000);
+                return true;
+            }
+
+            if (recovery.count <= 5) {
+                videoRecoveries.set(frame, recovery);
+                videoLoadWaits.delete(frame);
+                frame.contentWindow.location.reload();
+                showLog('刷新视频框架...');
+                mainTimer = setTimeout(runTaskLoop, 7000);
+                return true;
+            }
+        } catch (e) { }
+
+        showLog('视频加载失败，请手动处理', true);
+        mainTimer = setTimeout(runTaskLoop, 5000);
+        return true;
     }
 
     function injectVideoHacker(frame) {
@@ -179,7 +354,7 @@
             frame.contentWindow.eval(`
                 window.__inject_flag = true;
                 window.__video_hacked = false;
-                
+
                 function modifyPlayer() {
                     if(typeof videojs === 'undefined' || !videojs.getAllPlayers().length) {
                         setTimeout(modifyPlayer, 1000);
@@ -270,7 +445,7 @@
             const isFinishedByPlatform = parentContainer && parentContainer.classList.contains('ans-job-finished');
 
             if (isVideo) {
-                // 核心修改：如果用户勾选了“跳过平台已完成”，并且平台标记为 finished，直接 continue 忽略它
+                // 如果用户勾选了“跳过平台已完成”，并且平台标记为 finished，直接 continue 忽略它
                 if (skipFinishedVideos && isFinishedByPlatform) continue;
 
                 let isHackedByUs = false;
@@ -278,12 +453,37 @@
 
                 if (!isHackedByUs) {
                     hasUnfinishedVideo = true;
+                    const videoLoadState = getVideoLoadState(frame);
 
                     let isInjected = false;
                     try { isInjected = frame.contentWindow.__inject_flag === true; } catch (e) { }
 
                     if (!isInjected) {
-                        injectVideoHacker(frame);
+                        if (isDirectCompleteHost()) {
+                            directCompleteFrame(frame);
+                        } else {
+                            injectVideoHacker(frame);
+                        }
+                    }
+
+                    if (isDirectCompleteHost()) {
+                        continue;
+                    }
+
+                    if (videoLoadState.status === 'stalled') {
+                        recoverVideoLoad(frame, 'stalled');
+                        return;
+                    }
+
+                    if (videoLoadState.status === 'error') {
+                        recoverVideoLoad(frame, 'error');
+                        return;
+                    }
+
+                    if (videoLoadState.status === 'waitingSource') {
+                        showLog('等待视频源...');
+                        mainTimer = setTimeout(runTaskLoop, 2000);
+                        return;
                     }
                 }
             } else {
